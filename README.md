@@ -40,6 +40,10 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+## Diffusers integration
+
+Core code is organized like [NiT-diffusers](https://github.com/Bili-Sakura/NiT-diffusers.git): sources under `src/diffusers`, published as the **`diffusers_fit`** package (so the upstream `diffusers` wheel is unchanged). See [README_DIFFUSERS.md](README_DIFFUSERS.md) for layout, imports, and how this maps to a future upstream PR.
+
 ## Sample
 ### Basic Sampling
 

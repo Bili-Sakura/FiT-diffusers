@@ -24,10 +24,10 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from PIL import Image
 from diffusers.models import AutoencoderKL
-from fit.scheduler.transport import create_transport, Sampler
-from fit.utils.eval_utils import create_npz_from_sample_folder, init_from_ckpt
-from fit.utils.utils import instantiate_from_config
-from fit.utils.sit_eval_utils import parse_sde_args, parse_ode_args
+from diffusers_fit.schedulers.flow_transport import create_transport, Sampler
+from diffusers_fit.utils_training.eval_utils import create_npz_from_sample_folder, init_from_ckpt
+from diffusers_fit.utils_training.utils import instantiate_from_config
+from diffusers_fit.utils_training.sit_eval_utils import parse_sde_args, parse_ode_args
 
 def ntk_scaled_init(head_dim, base=10000, alpha=8):
     #The method is just these two lines

@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fit-diffusers"
+version = "0.1.0"
+description = "FiT / FiTv2 as a Diffusers-style add-on (sources under src/diffusers, import package diffusers_fit)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+dependencies = [
+    "diffusers>=0.30.1",
+    "torch",
+    "numpy",
+    "tqdm",
+    "einops",
+    "omegaconf",
+    "safetensors",
+    "accelerate",
+    "torchvision",
+    "Pillow",
+    "timm",
+    "torchdiffeq",
+]
+
+[tool.setuptools.package-dir]
+"diffusers_fit" = "src/diffusers"
+
+[tool.setuptools]
+packages = [
+    "diffusers_fit",
+    "diffusers_fit.data",
+    "diffusers_fit.models",
+    "diffusers_fit.models.transformers",
+    "diffusers_fit.pipelines",
+    "diffusers_fit.pipelines.fit",
+    "diffusers_fit.schedulers",
+    "diffusers_fit.schedulers.flow_transport",
+    "diffusers_fit.schedulers.improved_diffusion",
+    "diffusers_fit.utils_training",
+]

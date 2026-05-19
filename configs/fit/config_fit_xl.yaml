@@ -18,7 +18,7 @@ diffusion:
     steps_offset: 0
     clip_sample: false
   network_config:
-    target: fit.model.fit_model.FiT
+    target: diffusers_fit.models.transformers.transformer_fit.FiTTransformer2DModel
     params:
       context_size: 256
       patch_size: 2
@@ -36,7 +36,7 @@ diffusion:
 
 
 data:
-  target: fit.data.in1k_latent_dataset.INLatentLoader
+  target: diffusers_fit.data.in1k_latent_dataset.INLatentLoader
   params:
     train:
       data_path: datasets/imagenet1k_latents_256_sd_vae_ft_ema

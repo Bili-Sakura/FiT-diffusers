@@ -6,9 +6,9 @@ from torch import nn, Tensor
 from torch.jit import Final
 from timm.layers.mlp import SwiGLU, Mlp  
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
-from fit.model.rope import rotate_half
-from fit.model.utils import modulate
-from fit.model.norms import create_norm
+from .rope import rotate_half
+from .fit_model_utils import modulate
+from .norms import create_norm
 from functools import partial
 from einops import rearrange, repeat
 
