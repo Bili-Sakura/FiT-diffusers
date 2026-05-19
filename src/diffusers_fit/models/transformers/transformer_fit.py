@@ -1,24 +1,27 @@
 import torch
 import torch.nn as nn
-from functools import partial
 from typing import Optional
-from einops import rearrange, repeat
-from fit.model.modules import (
-    PatchEmbedder, TimestepEmbedder, LabelEmbedder,
-    FiTBlock, FinalLayer
+from einops import rearrange
+
+from diffusers.configuration_utils import ConfigMixin, register_to_config
+from diffusers.models.modeling_utils import ModelMixin
+
+from diffusers_fit.models.transformers.modules_fit import (
+    PatchEmbedder, TimestepEmbedder, LabelEmbedder, FiTBlock, FinalLayer,
 )
-from fit.model.utils import get_parameter_dtype
-from fit.utils.eval_utils import init_from_ckpt
-from fit.model.sincos import get_2d_sincos_pos_embed_from_grid
-from fit.model.rope import VisionRotaryEmbedding
-
-#################################################################################
-#                                 Core FiT Model                                #
-#################################################################################
+from diffusers_fit.utils.checkpoint import init_from_ckpt
+from diffusers_fit.models.transformers.rope_fit import VisionRotaryEmbedding
 
 
+def get_parameter_dtype(parameter: torch.nn.Module):
+    params = tuple(parameter.parameters())
+    if params:
+        return params[0].dtype
+    buffers = tuple(parameter.buffers())
+    return buffers[0].dtype if buffers else torch.float32
 
-class FiT(nn.Module):
+
+class _FiTCore(nn.Module):(nn.Module):
     """
     Flexible Diffusion model with a Transformer backbone.
     """
@@ -299,3 +302,17 @@ class FiT(nn.Module):
                 if unf in name: # LN means Layer Norm
                     param.requires_grad = True
         
+
+class FiTTransformer2DModel(ModelMixin, ConfigMixin, _FiTCore):
+    config_name = "config.json"
+
+    @register_to_config
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return get_parameter_dtype(self)
+
+
+FiT = FiTTransformer2DModel

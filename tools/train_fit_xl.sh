@@ -5,7 +5,7 @@ MASTER_ADDR = "localhost"
 export MASTER_PORT=60563
 
 CMD=" \
-    projects/FiT/FiT/train_fit.py \
+    projects/FiT/FiT/scripts/scripts/train_fit.py \
     --project_name ${JOB_NAME} \
     --main_project_name image_generation \
     --seed 0 \

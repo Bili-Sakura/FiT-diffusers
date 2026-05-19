@@ -28,16 +28,16 @@ from safetensors import safe_open
 from safetensors.torch import load_file
 from copy import deepcopy
 from einops import rearrange
-from fit.schedulers.improved_diffusion import create_diffusion
-from fit.utils.utils import (
+from diffusers_fit.schedulers.fit_gaussian_diffusion import create_diffusion
+from diffusers_fit.utils.config import (
     instantiate_from_config,
     default,
     get_obj_from_str,
     update_ema,
     
 )
-from fit.utils.eval_utils import init_from_ckpt
-from fit.utils.lr_scheduler import get_scheduler
+from diffusers_fit.utils.checkpoint import init_from_ckpt
+from diffusers_fit.utils.lr_scheduler import get_scheduler
 
 logger = get_logger(__name__, log_level="INFO")
 

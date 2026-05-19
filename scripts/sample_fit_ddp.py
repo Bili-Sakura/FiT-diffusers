@@ -12,6 +12,7 @@ evaluation metrics via the ADM repo: https://github.com/openai/guided-diffusion/
 For a simple single-GPU/CPU sampling script, see sample.py.
 """
 import os
+import sys
 import math
 import torch
 import argparse
@@ -23,10 +24,10 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from PIL import Image
 from diffusers.models import AutoencoderKL
-from fit.scheduler.improved_diffusion import create_diffusion
-rom fit.utils.eval_utils import create_npz_from_sample_folder, init_from_ckpt
-from fit.utils.utils import instantiate_from_config
-f
+from diffusers_fit.schedulers.fit_transport import create_transport, Sampler
+from diffusers_fit.utils.checkpoint import create_npz_from_sample_folder, init_from_ckpt
+from diffusers_fit.utils.config import instantiate_from_config
+from diffusers_fit.utils.sit_eval_utils import parse_sde_args, parse_ode_args
 
 def ntk_scaled_init(head_dim, base=10000, alpha=8):
     #The method is just these two lines
@@ -68,12 +69,14 @@ def main(args):
     n_patch_h, n_patch_w = H // patch_size, W // patch_size
     
     if args.interpolation != 'no':
-        # sqrt(256) or sqrt(512), we set max PE length for inference, in fact some PE has been seen in the training stage.
-        ori_max_pe_len = int(config_diffusion.network_config.params.context_size ** 0.5) 
         if args.interpolation == 'linear':    # 这个就是positional index interpolation，原来叫normal，现在叫linear
             config_diffusion.network_config.params['custom_freqs'] = 'linear'
         elif args.interpolation == 'dynntk':    # 这个就是ntk-aware
             config_diffusion.network_config.params['custom_freqs'] = 'ntk-aware'
+        elif args.interpolation == 'ntkpro1':
+            config_diffusion.network_config.params['custom_freqs'] = 'ntk-aware-pro1'
+        elif args.interpolation == 'ntkpro2':
+            config_diffusion.network_config.params['custom_freqs'] = 'ntk-aware-pro2'
         elif args.interpolation == 'partntk':   # 这个就是ntk-by-parts
             config_diffusion.network_config.params['custom_freqs'] = 'ntk-by-parts'
         elif args.interpolation == 'yarn':
@@ -83,10 +86,15 @@ def main(args):
         config_diffusion.network_config.params['max_pe_len_h'] = n_patch_h
         config_diffusion.network_config.params['max_pe_len_w'] = n_patch_w
         config_diffusion.network_config.params['decouple'] = args.decouple
-        config_diffusion.network_config.params['ori_max_pe_len'] = int(ori_max_pe_len)
+        config_diffusion.network_config.params['ori_max_pe_len'] = int(args.ori_max_pe_len)
+        
+        config_diffusion.network_config.params['online_rope'] = False
         
     else:   # there is no need to do interpolation!
-        pass
+        config_diffusion.network_config.params['custom_freqs'] = 'normal'
+        config_diffusion.network_config.params['online_rope'] = False
+        
+        
     
     model = instantiate_from_config(config_diffusion.network_config).to(device, dtype=weight_dtype)
     init_from_ckpt(model, checkpoint_dir=args.ckpt, ignore_keys=None, verbose=True)
@@ -101,13 +109,45 @@ def main(args):
     vae.eval() # important
     
     
-    config_diffusion.improved_diffusion.timestep_respacing = str(args.num_sampling_steps)
-    diffusion = create_diffusion(**OmegaConf.to_container(config_diffusion.improved_diffusion))
+    # prepare transport
+    transport = create_transport(**OmegaConf.to_container(config_diffusion.transport))  # default: velocity; 
+    sampler = Sampler(transport)
+    sampler_mode = args.sampler_mode
+    if sampler_mode == "ODE":
+        if args.likelihood:
+            assert args.cfg_scale == 1, "Likelihood is incompatible with guidance"
+            sample_fn = sampler.sample_ode_likelihood(
+                sampling_method=args.ode_sampling_method,
+                num_steps=args.num_sampling_steps,
+                atol=args.atol,
+                rtol=args.rtol,
+            )
+        else:
+            sample_fn = sampler.sample_ode(
+                sampling_method=args.ode_sampling_method,
+                num_steps=args.num_sampling_steps,
+                atol=args.atol,
+                rtol=args.rtol,
+                reverse=args.reverse
+            )
+    elif sampler_mode == "SDE":
+        sample_fn = sampler.sample_sde(
+            sampling_method=args.sde_sampling_method,
+            diffusion_form=args.diffusion_form,
+            diffusion_norm=args.diffusion_norm,
+            last_step=args.last_step,
+            last_step_size=args.last_step_size,
+            num_steps=args.num_sampling_steps,
+        )
+    else:
+        raise NotImplementedError
+    
 
-
+    
     workdir_name = 'official_fit'
     folder_name = f'{args.ckpt.split("/")[-1].split(".")[0]}'
 
+    
     sample_folder_dir = f"{args.sample_dir}/{workdir_name}/{folder_name}"
     if rank == 0:
         os.makedirs(os.path.join(args.sample_dir, workdir_name), exist_ok=True)
@@ -139,45 +179,42 @@ def main(args):
         index+=1
         # Sample inputs:
         z = torch.randn(
-            (n, (patch_size**2)*model.in_channels, n_patch_h*n_patch_w)
+            (n, n_patch_h*n_patch_w, (patch_size**2)*model.in_channels)
         ).to(device=device, dtype=weight_dtype)
         y = torch.randint(0, args.num_classes, (n,), device=device)
         
         # prepare for x
-        grid_h = torch.arange(n_patch_h, dtype=torch.float32)
-        grid_w = torch.arange(n_patch_w, dtype=torch.float32)
+        grid_h = torch.arange(n_patch_h, dtype=torch.long)
+        grid_w = torch.arange(n_patch_w, dtype=torch.long)
         grid = torch.meshgrid(grid_w, grid_h, indexing='xy')
         grid = torch.cat(
             [grid[0].reshape(1,-1), grid[1].reshape(1,-1)], dim=0
-        ).repeat(n,1,1).to(device=device, dtype=weight_dtype)
+        ).repeat(n,1,1).to(device=device, dtype=torch.long)
         mask = torch.ones(n, n_patch_h*n_patch_w).to(device=device, dtype=weight_dtype)
         size = torch.tensor((n_patch_h, n_patch_w)).repeat(n,1).to(device=device, dtype=torch.long)
         size = size[:, None, :]
-        
-       
-        
         # Setup classifier-free guidance:
         if using_cfg:
-            z = torch.cat([z, z], 0)            # (B, patch_size**2 * C, N) -> (2B, patch_size**2 * C, N)
+            z = torch.cat([z, z], 0)            # (B, N, patch_size**2 * C) -> (2B, N, patch_size**2 * C)
             y_null = torch.tensor([1000] * n, device=device)
             y = torch.cat([y, y_null], 0)       # (B,) -> (2B, )
             grid = torch.cat([grid, grid], 0)   # (B, 2, N) -> (2B, 2, N)
             mask = torch.cat([mask, mask], 0)   # (B, N) -> (2B, N)
-            model_kwargs = dict(y=y, grid=grid.long(), mask=mask, size=size, cfg_scale=args.cfg_scale)
-            sample_fn = model.forward_with_cfg
+            size = torch.cat([size, size], 0)
+            model_kwargs = dict(y=y, grid=grid, mask=mask, size=size, cfg_scale=args.cfg_scale, scale_pow=args.scale_pow)
+            model_fn = model.forward_with_cfg
         else:
-            model_kwargs = dict(y=y, grid=grid.long(), mask=mask, size=size)
-            sample_fn = model.forward
+            model_kwargs = dict(y=y, grid=grid, mask=mask, size=size)
+            model_fn = model.forward
+
         
         # Sample images:
-        samples = diffusion.p_sample_loop(
-            sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
-        )
+        samples = sample_fn(z, model_fn, **model_kwargs)[-1]
         if using_cfg:
             samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
 
         samples = samples[..., : n_patch_h*n_patch_w]
-        samples = model.unpatchify(samples, (H, W))
+        samples = model.unpatchify(samples, (H, W))        
         samples = vae.decode(samples / vae.config.scaling_factor).sample
         samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to(torch.uint8).contiguous()
 
@@ -185,7 +222,6 @@ def main(args):
         gathered_samples = [torch.zeros_like(samples) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, samples)  # gather not supported with NCCL
         all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
-        torch.cuda.empty_cache()
         # Save samples to disk as individual .png files
         for i, sample in enumerate(samples.cpu().numpy()):
             index = i * dist.get_world_size() + rank + total
@@ -197,6 +233,8 @@ def main(args):
     # Make sure all processes have finished saving their samples before attempting to convert to .npz
     dist.barrier()
     if rank == 0:
+        import time
+        time.sleep(20)
         arr = np.concatenate(all_images, axis=0)
         arr = arr[: int(args.num_fid_samples)]
         npz_path = f"{sample_folder_dir}.npz"
@@ -217,12 +255,18 @@ if __name__ == "__main__":
     parser.add_argument("--image-width", type=int, default=256)
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--vae-decoder", type=str, choices=['sd-ft-mse', 'sd-ft-ema'], default='sd-ft-ema')
-    parser.add_argument("--cfg-scale",  type=str, default='1.5')
+    parser.add_argument("--cfg-scale",  type=str, default='1.0')
+    parser.add_argument("--scale-pow",  type=float, default=0.0)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
     parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--interpolation", type=str, choices=['no', 'linear', 'yarn', 'dynntk', 'partntk'], default='no') # interpolation
+    parser.add_argument("--interpolation", type=str, choices=['no', 'linear', 'yarn', 'dynntk', 'partntk', 'ntkpro1', 'ntkpro2'], default='no') # interpolation
+    parser.add_argument("--ori-max-pe-len", default=None, type=int)
     parser.add_argument("--decouple", default=False, action="store_true") # interpolation
+    parser.add_argument("--sampler-mode", default='SDE', choices=['SDE', 'ODE'])
     parser.add_argument("--tf32", action='store_true', default=True)
     parser.add_argument("--mixed", type=str, default="fp32")
+    parser.add_argument("--save-images", action='store_true', default=False)
+    parse_ode_args(parser)
+    parse_sde_args(parser)
     args = parser.parse_args()
     main(args)

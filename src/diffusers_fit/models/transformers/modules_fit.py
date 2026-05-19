@@ -6,9 +6,14 @@ from torch import nn, Tensor
 from torch.jit import Final
 from timm.layers.mlp import SwiGLU, Mlp  
 from typing import Any, Callable, Dict, List, Optional, Union, Tuple
-from fit.model.rope import rotate_half
-from fit.model.utils import modulate
-from fit.model.norms import create_norm
+from diffusers_fit.models.transformers.rope_fit import rotate_half
+
+from diffusers_fit.models.transformers.norms_fit import create_norm
+
+
+def modulate(x, shift, scale):
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
 from functools import partial
 from einops import rearrange, repeat
 

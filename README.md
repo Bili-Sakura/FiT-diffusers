@@ -9,7 +9,7 @@
 📦 <a href="https://huggingface.co/InfImagine/FiTv2" target="_blank">FiTv2 Checkpoint</a> <br> 
 </p>
 
-This is the official repo which contains PyTorch model definitions, pre-trained weights and sampling code for our flexible vision transformer (FiT).
+This is the official repo which contains PyTorch model definitions (see README_DIFFUSERS.md for native Diffusers layout under `src/diffusers_fit`), pre-trained weights and sampling code for our flexible vision transformer (FiT).
 FiT is a diffusion transformer based model which can generate images at unrestricted resolutions and aspect ratios.
 
 The core features will include:
