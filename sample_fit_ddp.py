@@ -23,10 +23,9 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 from PIL import Image
 from diffusers.models import AutoencoderKL
-from fit.scheduler.improved_diffusion import create_diffusion
-rom fit.utils.eval_utils import create_npz_from_sample_folder, init_from_ckpt
-from fit.utils.utils import instantiate_from_config
-f
+from diffusers_fit.schedulers.improved_diffusion import create_diffusion
+from diffusers_fit.utils_training.eval_utils import create_npz_from_sample_folder, init_from_ckpt
+from diffusers_fit.utils_training.utils import instantiate_from_config
 
 def ntk_scaled_init(head_dim, base=10000, alpha=8):
     #The method is just these two lines

@@ -1,6 +1,11 @@
 import importlib
+from collections import OrderedDict
+from inspect import isfunction
+def exists(val):
+    return val is not None
 
 import torch
+
 
 def get_obj_from_str(string, reload=False, invalidate_cache=True):
     module, cls = string.rsplit(".", 1)
