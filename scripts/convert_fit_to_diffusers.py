@@ -44,6 +44,26 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
         "use_swiglu_large": True,
         "rel_pos_embed": "rope",
     },
+    "FiTv2-XL/2": {
+        "context_size": 256,
+        "patch_size": 2,
+        "in_channels": 4,
+        "hidden_size": 1152,
+        "depth": 36,
+        "num_heads": 16,
+        "mlp_ratio": 4.0,
+        "class_dropout_prob": 0.1,
+        "num_classes": 1000,
+        "learn_sigma": False,
+        "use_sit": True,
+        "use_swiglu": True,
+        "use_swiglu_large": False,
+        "q_norm": "layernorm",
+        "k_norm": "layernorm",
+        "rel_pos_embed": "rope",
+        "adaln_type": "lora",
+        "adaln_lora_dim": 288,
+    },
 }
 
 DDPM_SCHEDULER_CONFIG = {
@@ -60,6 +80,14 @@ DDPM_SCHEDULER_CONFIG = {
     "timestep_spacing": "linspace",
     "steps_offset": 0,
     "trained_betas": None,
+}
+
+FLOW_MATCH_SCHEDULER_CONFIG = {
+    "_class_name": "FlowMatchEulerDiscreteScheduler",
+    "_diffusers_version": "0.36.0",
+    "num_train_timesteps": 1000,
+    "shift": 1.0,
+    "stochastic_sampling": False,
 }
 
 BUNDLE_SCRIPT = REPO_ROOT / "scripts" / "bundle_fit_hub_modules.py"
@@ -142,14 +170,16 @@ def _save_weights(output_dir: Path, state_dict: Dict[str, torch.Tensor], safe_se
         torch.save(state_dict, output_dir / "diffusion_pytorch_model.bin")
 
 
-def _write_model_index(output_dir: Path):
+def _write_model_index(output_dir: Path, *, model: str, image_size: int):
     id2label_int = load_imagenet_id2label()
+    is_fiTv2 = model.startswith("FiTv2")
     model_index = {
-        "_class_name": ["pipeline", "FiTPipeline"],
+        "_class_name": ["pipeline", "FiTv2Pipeline" if is_fiTv2 else "FiTPipeline"],
         "_diffusers_version": "0.36.0",
         "transformer": ["fit_transformer_2d", "FiTTransformer2DModel"],
         "vae": ["diffusers", "AutoencoderKL"],
-        "scheduler": ["diffusers", "DDPMScheduler"],
+        "scheduler": ["diffusers", "FlowMatchEulerDiscreteScheduler" if is_fiTv2 else "DDPMScheduler"],
+        "sample_size": int(image_size),
         "id2label": {str(class_id): id2label_int[class_id] for class_id in range(1000)},
     }
     with open(output_dir / "model_index.json", "w", encoding="utf-8") as handle:
@@ -158,6 +188,10 @@ def _write_model_index(output_dir: Path):
 
 
 def _write_readme(output_dir: Path, *, variant_name: str, model: str, image_size: int):
+    is_fiTv2 = model.startswith("FiTv2")
+    pipeline_class = "FiTv2Pipeline" if is_fiTv2 else "FiTPipeline"
+    scheduler_name = "FlowMatchEulerDiscreteScheduler" if is_fiTv2 else "DDPMScheduler"
+    sampler_note = "flow matching (velocity ODE)" if is_fiTv2 else "improved diffusion (DDPM respaced)"
     content = f"""---
 license: apache-2.0
 library_name: diffusers
@@ -178,9 +212,9 @@ Self-contained Diffusers checkpoint for **{model}**, converted from [`InfImagine
 Each subfolder is a self-contained Diffusers model repo with:
 
 - `model_index.json` (includes ImageNet `id2label`)
-- `pipeline.py` (custom `FiTPipeline`)
+- `pipeline.py` (custom `{pipeline_class}`)
 - `transformer/fit_transformer_2d.py` and weights
-- `scheduler/scheduler_config.json` (`DDPMScheduler`, matches FiTv1 improved diffusion)
+- `scheduler/scheduler_config.json` (`{scheduler_name}`)
 - `vae/diffusion_pytorch_model.safetensors`
 
 ## Recommended inference ({image_size}×{image_size})
@@ -188,7 +222,7 @@ Each subfolder is a self-contained Diffusers model repo with:
 | Setting | Value |
 | --- | --- |
 | Resolution | {image_size}×{image_size} |
-| Sampler | improved diffusion (DDPM respaced) |
+| Sampler | {sampler_note} |
 | Steps | 250 |
 | CFG scale | 1.5 |
 | Dtype | `float32` (or `bfloat16` on Ampere+) |
@@ -233,7 +267,16 @@ def _ensure_bundled_modules() -> None:
 
 def make_self_contained_repo(output_dir: Path, *, variant_name: str, model: str, image_size: int):
     _ensure_bundled_modules()
-    shutil.copy2(REPO_ROOT / "templates/pipeline.py", output_dir / "pipeline.py")
+    is_fiTv2 = model.startswith("FiTv2")
+    pipeline_template = REPO_ROOT / ("templates/pipeline_fiTv2.py" if is_fiTv2 else "templates/pipeline.py")
+    shutil.copy2(pipeline_template, output_dir / "pipeline.py")
+    if image_size != 256:
+        pipeline_text = (output_dir / "pipeline.py").read_text(encoding="utf-8")
+        pipeline_text = pipeline_text.replace(
+            "DEFAULT_NATIVE_RESOLUTION = 256",
+            f"DEFAULT_NATIVE_RESOLUTION = {image_size}",
+        )
+        (output_dir / "pipeline.py").write_text(pipeline_text, encoding="utf-8")
 
     transformer_dir = output_dir / "transformer"
     if transformer_dir.exists():
@@ -248,9 +291,10 @@ def make_self_contained_repo(output_dir: Path, *, variant_name: str, model: str,
         for path in scheduler_dir.glob("*.py"):
             path.unlink()
     scheduler_dir.mkdir(parents=True, exist_ok=True)
-    _save_config(scheduler_dir, DDPM_SCHEDULER_CONFIG, filename="scheduler_config.json")
+    scheduler_config = FLOW_MATCH_SCHEDULER_CONFIG if is_fiTv2 else DDPM_SCHEDULER_CONFIG
+    _save_config(scheduler_dir, scheduler_config, filename="scheduler_config.json")
 
-    _write_model_index(output_dir)
+    _write_model_index(output_dir, model=model, image_size=image_size)
     _write_readme(output_dir, variant_name=variant_name, model=model, image_size=image_size)
 
 
@@ -310,6 +354,18 @@ def main():
         preset["learn_sigma"] = infer_learn_sigma(state_dict, patch_size=preset["patch_size"])
 
     config = {"_class_name": "FiTTransformer2DModel", **preset}
+    if args.image_size == 512 and args.model.startswith("FiTv2"):
+        patch_grid = args.image_size // 8 // preset["patch_size"]
+        config.update(
+            {
+                "custom_freqs": "ntk-aware",
+                "decouple": True,
+                "ori_max_pe_len": 16,
+                "max_pe_len_h": patch_grid,
+                "max_pe_len_w": patch_grid,
+                "online_rope": False,
+            }
+        )
 
     if args.check_load:
         print(f"Verifying weight load on {device}...")
