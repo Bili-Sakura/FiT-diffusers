@@ -9,7 +9,10 @@ from einops import rearrange
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 
-from ...utils_training.eval_utils import init_from_ckpt
+try:
+    from ...utils_training.eval_utils import init_from_ckpt
+except ImportError:
+    from eval_utils import init_from_ckpt
 
 from .fit_modules import FiTBlock, FinalLayer, LabelEmbedder, PatchEmbedder, TimestepEmbedder
 from .rope import VisionRotaryEmbedding
@@ -88,7 +91,7 @@ class FiTTransformer2DModel(ModelMixin, ConfigMixin):
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
 
-        self.rel_pos_embed = VisionRotaryEmbedding(
+        self.rope_embedder = VisionRotaryEmbedding(
             head_dim=hidden_size // num_heads,
             theta=rope_theta,
             custom_freqs=custom_freqs,
@@ -202,8 +205,14 @@ class FiTTransformer2DModel(ModelMixin, ConfigMixin):
         return x
 
     def forward(self, x, t, y, grid, mask, size=None):
-        t = torch.clamp(self.time_shifting * t / (1 + (self.time_shifting - 1) * t), max=1.0)
-        t = t.float().to(x.dtype)
+        dtype = self.x_embedder.proj.weight.dtype
+        x = x.to(dtype=dtype)
+        mask = mask.to(dtype=dtype)
+        # Flow-matching (FiTv2 / use_sit) expects t in [0, 1]. Improved diffusion (FiTv1)
+        # passes integer timesteps 0..T-1 directly to TimestepEmbedder, like DiT.
+        if self.use_sit:
+            t = torch.clamp(self.time_shifting * t / (1 + (self.time_shifting - 1) * t), max=1.0)
+        t = t.float().to(dtype)
         if not self.use_sit:
             x = rearrange(x, "B C N -> B N C")
         x = self.x_embedder(x)
@@ -212,11 +221,13 @@ class FiTTransformer2DModel(ModelMixin, ConfigMixin):
         c = t + y
 
         if self.online_rope:
-            freqs_cos, freqs_sin = self.rel_pos_embed.online_get_2d_rope_from_grid(grid, size)
+            freqs_cos, freqs_sin = self.rope_embedder.online_get_2d_rope_from_grid(grid, size)
             freqs_cos, freqs_sin = freqs_cos.unsqueeze(1), freqs_sin.unsqueeze(1)
         else:
-            freqs_cos, freqs_sin = self.rel_pos_embed.get_cached_2d_rope_from_grid(grid)
+            freqs_cos, freqs_sin = self.rope_embedder.get_cached_2d_rope_from_grid(grid)
             freqs_cos, freqs_sin = freqs_cos.unsqueeze(1), freqs_sin.unsqueeze(1)
+        freqs_cos = freqs_cos.to(dtype=dtype)
+        freqs_sin = freqs_sin.to(dtype=dtype)
         if self.global_adaLN_modulation is not None:
             global_adaln = self.global_adaLN_modulation(c)
         else:
@@ -252,7 +263,8 @@ class FiTTransformer2DModel(ModelMixin, ConfigMixin):
             scale_step = (1 - torch.cos(((1 - torch.clamp_max(t, 1.0)) ** scale_pow) * torch.pi)) * 1 / 2
             real_cfg_scale = (cfg_scale - 1) * scale_step + 1
             real_cfg_scale = real_cfg_scale[: len(x) // 2].view(-1, 1, 1)
-        t = t / (self.time_shifting + (1 - self.time_shifting) * t)
+            if self.use_sit:
+                t = t / (self.time_shifting + (1 - self.time_shifting) * t)
         half_eps = uncond_eps + real_cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)
         if self.use_sit:
