@@ -64,6 +64,26 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
         "adaln_type": "lora",
         "adaln_lora_dim": 288,
     },
+    "FiTv2-3B/2": {
+        "context_size": 256,
+        "patch_size": 2,
+        "in_channels": 4,
+        "hidden_size": 2304,
+        "depth": 40,
+        "num_heads": 24,
+        "mlp_ratio": 4.0,
+        "class_dropout_prob": 0.1,
+        "num_classes": 1000,
+        "learn_sigma": False,
+        "use_sit": True,
+        "use_swiglu": True,
+        "use_swiglu_large": False,
+        "q_norm": "layernorm",
+        "k_norm": "layernorm",
+        "rel_pos_embed": "rope",
+        "adaln_type": "lora",
+        "adaln_lora_dim": 576,
+    },
 }
 
 DDPM_SCHEDULER_CONFIG = {
